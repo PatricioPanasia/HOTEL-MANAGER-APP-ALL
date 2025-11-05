@@ -16,14 +16,10 @@ const TaskController = {
       
       const offset = (page - 1) * parseInt(limit);
 
-      // Construir query base
+      // Construir query base (sin joins por ahora para evitar errores de FK)
       let query = supabase
         .from('tareas')
-        .select(`
-          *,
-          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
-          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
-        `, { count: 'exact' });
+        .select('*', { count: 'exact' });
 
       // Aplicar filtros
       if (estado) {
@@ -83,11 +79,7 @@ const TaskController = {
 
       const { data: task, error } = await supabase
         .from('tareas')
-        .select(`
-          *,
-          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
-          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
-        `)
+        .select('*')
         .eq('id', id)
         .single();
 
@@ -162,11 +154,7 @@ const TaskController = {
       const { data: newTask, error } = await supabase
         .from('tareas')
         .insert([taskData])
-        .select(`
-          *,
-          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
-          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
-        `)
+        .select()
         .single();
 
       if (error) {
