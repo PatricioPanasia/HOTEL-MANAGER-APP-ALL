@@ -19,6 +19,10 @@ const { authenticateToken } = require('./src/middleware/authMiddleware');
 
 const app = express();
 
+// Detect if running on Vercel (no /api prefix needed) or local (needs /api prefix)
+const isVercel = process.env.VERCEL === '1';
+const apiPrefix = isVercel ? '' : '/api';
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -33,23 +37,24 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Public routes
-app.use('/api/auth', authRoutes);
+app.use(`${apiPrefix}/auth`, authRoutes);
 
 // Protected routes
-app.use('/api/users', authenticateToken, userRoutes);
-app.use('/api/tasks', authenticateToken, taskRoutes);
-app.get('/api/notes/stats', authenticateToken, getNoteStats);
-app.get('/api/attendance/status', authenticateToken, getCurrentStatus);
-app.use('/api/notes', authenticateToken, noteRoutes);
-app.use('/api/attendance', authenticateToken, attendanceRoutes);
-app.use('/api/reports', authenticateToken, reportRoutes);
+app.use(`${apiPrefix}/users`, authenticateToken, userRoutes);
+app.use(`${apiPrefix}/tasks`, authenticateToken, taskRoutes);
+app.get(`${apiPrefix}/notes/stats`, authenticateToken, getNoteStats);
+app.get(`${apiPrefix}/attendance/status`, authenticateToken, getCurrentStatus);
+app.use(`${apiPrefix}/notes`, authenticateToken, noteRoutes);
+app.use(`${apiPrefix}/attendance`, authenticateToken, attendanceRoutes);
+app.use(`${apiPrefix}/reports`, authenticateToken, reportRoutes);
 
 // Health
-app.get('/api/health', (req, res) => {
+app.get(`${apiPrefix}/health`, (req, res) => {
   res.json({
     status: 'OK',
     message: 'Hotel Manager API is running',
     timestamp: new Date().toISOString(),
+    environment: isVercel ? 'vercel' : 'local',
   });
 });
 
