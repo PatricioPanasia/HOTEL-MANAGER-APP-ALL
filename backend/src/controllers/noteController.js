@@ -1,4 +1,3 @@
-const { query } = require('../config/database');
 const supabase = require('../config/supabase');
 
 const NoteController = {
@@ -6,154 +5,83 @@ const NoteController = {
   getAllNotes: async (req, res) => {
     try {
       const { page = 1, limit = 10, tipo, importante } = req.query;
-      const offset = (page - 1) * limit;
+      const offset = (page - 1) * parseInt(limit);
 
-      let whereConditions = [];
-      let queryParams = [];
+      let q = supabase.from('notas').select('*', { count: 'exact' });
 
-      // Filtros
-      if (tipo) {
-        whereConditions.push('tipo = ?');
-        queryParams.push(tipo);
-      }
+      if (tipo) q = q.eq('tipo', tipo);
+      if (typeof importante !== 'undefined') q = q.eq('importante', importante === 'true');
 
-      if (importante !== undefined) {
-        whereConditions.push('importante = ?');
-        queryParams.push(importante === 'true');
-      }
-
-      // LÓGICA DE PERMISOS CORREGIDA
+      // Permisos
       if (req.user.rol !== 'admin') {
         if (req.user.rol === 'supervisor') {
-          // Supervisores ven notas de equipo, generales y sus personales
-          whereConditions.push('(tipo IN ("equipo", "general") OR usuario_id = ? OR usuario_asignado = ?)');
-          queryParams.push(req.user.id, req.user.id);
+          q = q.or(`tipo.eq.equipo,tipo.eq.general,usuario_id.eq.${req.user.id},usuario_asignado.eq.${req.user.id}`);
         } else {
-          // Recepcionistas ven:
-          // 1. Sus notas personales (usuario_id = su id)
-          // 2. Notas de equipo (tipo = "equipo") 
-          // 3. Notas generales (tipo = "general")
-          // 4. Notas asignadas específicamente a ellos (usuario_asignado = su id)
-          whereConditions.push('(usuario_id = ? OR tipo IN ("equipo", "general") OR usuario_asignado = ?)');
-          queryParams.push(req.user.id, req.user.id);
+          q = q.or(`usuario_id.eq.${req.user.id},tipo.eq.equipo,tipo.eq.general,usuario_asignado.eq.${req.user.id}`);
         }
       }
 
-      const whereClause = whereConditions.length > 0 
-        ? `WHERE ${whereConditions.join(' AND ')}` 
-        : '';
+      const { data: notes, error, count } = await q
+        .order('fecha_creacion', { ascending: false })
+        .range(offset, offset + parseInt(limit) - 1);
 
-      console.log('🔍 Notas query for user:', req.user.id, 'Role:', req.user.rol);
-      console.log('📋 Where clause:', whereClause);
-      console.log('📊 Query params:', queryParams);
-
-      const notes = await query(
-        `SELECT n.*, 
-                u.nombre as usuario_nombre,
-                u.rol as usuario_rol,
-                ua.nombre as asignado_nombre
-         FROM notas n 
-         JOIN usuarios u ON n.usuario_id = u.id
-         LEFT JOIN usuarios ua ON n.usuario_asignado = ua.id
-         ${whereClause}
-         ORDER BY n.fecha_creacion DESC 
-         LIMIT ? OFFSET ?`,
-        [...queryParams, parseInt(limit), offset]
-      );
-
-      const countResult = await query(
-        `SELECT COUNT(*) as total FROM notas n ${whereClause}`,
-        queryParams
-      );
-
-      console.log('✅ Notes found:', notes.length, 'for user:', req.user.id);
+      if (error) throw error;
 
       res.json({
         success: true,
-        data: notes,
+        data: notes || [],
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: countResult[0].total,
-          pages: Math.ceil(countResult[0].total / limit)
+          total: count || 0,
+          pages: Math.ceil((count || 0) / parseInt(limit))
         }
       });
     } catch (error) {
-      console.error('❌ Error fetching notes:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching notes'
-      });
+      console.error('[noteController.getAllNotes] Error:', error);
+      res.status(500).json({ success: false, message: 'Error fetching notes' });
     }
   },
 
   // Crear nueva nota
   createNote: async (req, res) => {
     try {
-      const { titulo, contenido, tipo, importante, usuario_asignado } = req.body;
+      const { titulo, contenido, tipo = 'personal', importante = false, usuario_asignado = null } = req.body;
 
-      console.log('📝 Creating note for user:', req.user.id, 'Data:', req.body);
+      console.log('[noteController.createNote] Creating note for user:', req.user.id);
 
       if (!titulo || !contenido) {
-        return res.status(400).json({
-          success: false,
-          message: 'Title and content are required'
-        });
+        return res.status(400).json({ success: false, message: 'Title and content are required' });
       }
 
-      // Validar que el tipo sea permitido para el rol
       const allowedTypes = ['personal'];
-      if (req.user.rol === 'admin' || req.user.rol === 'supervisor') {
-        allowedTypes.push('equipo', 'general');
-      }
-
+      if (req.user.rol === 'admin' || req.user.rol === 'supervisor') allowedTypes.push('equipo', 'general');
       if (!allowedTypes.includes(tipo)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not allowed to create this type of note'
-        });
+        return res.status(403).json({ success: false, message: 'Not allowed to create this type of note' });
       }
 
-      // Si se asigna a otro usuario, verificar permisos
       if (usuario_asignado && usuario_asignado !== req.user.id) {
         if (req.user.rol !== 'admin' && req.user.rol !== 'supervisor') {
-          return res.status(403).json({
-            success: false,
-            message: 'Only admins and supervisors can assign notes to other users'
-          });
+          return res.status(403).json({ success: false, message: 'Only admins and supervisors can assign notes to other users' });
         }
       }
 
-      const result = await query(
-        'INSERT INTO notas (titulo, contenido, usuario_id, tipo, importante, usuario_asignado) VALUES (?, ?, ?, ?, ?, ?)',
-        [titulo, contenido, req.user.id, tipo, importante || false, usuario_asignado || null]
-      );
+      const insertData = {
+        titulo: titulo.trim(),
+        contenido: contenido.trim(),
+        usuario_id: req.user.id,
+        tipo,
+        importante: !!importante,
+        usuario_asignado: usuario_asignado || null,
+      };
 
-      console.log('✅ Note created with ID:', result.insertId);
+      const { data: newNote, error } = await supabase.from('notas').insert([insertData]).select('*').single();
+      if (error) throw error;
 
-      // Obtener la nota creada con información de usuarios
-      const newNote = await query(
-        `SELECT n.*, 
-                u.nombre as usuario_nombre,
-                ua.nombre as asignado_nombre
-         FROM notas n 
-         JOIN usuarios u ON n.usuario_id = u.id
-         LEFT JOIN usuarios ua ON n.usuario_asignado = ua.id
-         WHERE n.id = ?`,
-        [result.insertId]
-      );
-
-      res.status(201).json({
-        success: true,
-        message: 'Note created successfully',
-        data: newNote[0]
-      });
+      res.status(201).json({ success: true, message: 'Note created successfully', data: newNote });
     } catch (error) {
-      console.error('❌ Error creating note:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error creating note'
-      });
+      console.error('[noteController.createNote] Error:', error);
+      res.status(500).json({ success: false, message: 'Error creating note' });
     }
   },
 
@@ -161,50 +89,32 @@ const NoteController = {
   updateNote: async (req, res) => {
     try {
       const { id } = req.params;
-      const { titulo, contenido, tipo, importante, usuario_asignado } = req.body;
+      const updates = req.body;
 
-      console.log('📝 Updating note:', id, 'by user:', req.user.id);
+      console.log('[noteController.updateNote] Updating note:', id, 'by user:', req.user.id);
 
-      // Verificar que la nota existe
-      const existingNote = await query(
-        'SELECT * FROM notas WHERE id = ?',
-        [id]
-      );
-
-      if (existingNote.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Note not found'
-        });
+      const { data: note, error: fetchError } = await supabase.from('notas').select('*').eq('id', id).single();
+      if (fetchError || !note) {
+        return res.status(404).json({ success: false, message: 'Note not found' });
       }
 
-      const note = existingNote[0];
-
-      // Verificar permisos (solo admin o el creador pueden editar)
       if (req.user.rol !== 'admin' && note.usuario_id !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'Insufficient permissions to update this note'
-        });
+        return res.status(403).json({ success: false, message: 'Insufficient permissions to update this note' });
       }
 
-      await query(
-        'UPDATE notas SET titulo = ?, contenido = ?, tipo = ?, importante = ?, usuario_asignado = ? WHERE id = ?',
-        [titulo, contenido, tipo, importante || false, usuario_asignado || null, id]
-      );
-
-      console.log('✅ Note updated successfully:', id);
-
-      res.json({
-        success: true,
-        message: 'Note updated successfully'
+      const allowed = ['titulo', 'contenido', 'tipo', 'importante', 'usuario_asignado'];
+      const updateData = {};
+      allowed.forEach((k) => {
+        if (updates.hasOwnProperty(k)) updateData[k] = updates[k];
       });
+
+      const { error: updError } = await supabase.from('notas').update(updateData).eq('id', id);
+      if (updError) throw updError;
+
+      res.json({ success: true, message: 'Note updated successfully' });
     } catch (error) {
-      console.error('❌ Error updating note:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error updating note'
-      });
+      console.error('[noteController.updateNote] Error:', error);
+      res.status(500).json({ success: false, message: 'Error updating note' });
     }
   },
 
@@ -212,46 +122,24 @@ const NoteController = {
   deleteNote: async (req, res) => {
     try {
       const { id } = req.params;
+      console.log('[noteController.deleteNote] Deleting note:', id, 'by user:', req.user.id);
 
-      console.log('🗑️ Deleting note:', id, 'by user:', req.user.id);
-
-      // Verificar que la nota existe
-      const existingNote = await query(
-        'SELECT * FROM notas WHERE id = ?',
-        [id]
-      );
-
-      if (existingNote.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Note not found'
-        });
+      const { data: note, error: fetchError } = await supabase.from('notas').select('*').eq('id', id).single();
+      if (fetchError || !note) {
+        return res.status(404).json({ success: false, message: 'Note not found' });
       }
 
-      const note = existingNote[0];
-
-      // Verificar permisos (solo admin o el creador pueden eliminar)
       if (req.user.rol !== 'admin' && note.usuario_id !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'Insufficient permissions to delete this note'
-        });
+        return res.status(403).json({ success: false, message: 'Insufficient permissions to delete this note' });
       }
 
-      await query('DELETE FROM notas WHERE id = ?', [id]);
+      const { error: delError } = await supabase.from('notas').delete().eq('id', id);
+      if (delError) throw delError;
 
-      console.log('✅ Note deleted successfully:', id);
-
-      res.json({
-        success: true,
-        message: 'Note deleted successfully'
-      });
+      res.json({ success: true, message: 'Note deleted successfully' });
     } catch (error) {
-      console.error('❌ Error deleting note:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error deleting note'
-      });
+      console.error('[noteController.deleteNote] Error:', error);
+      res.status(500).json({ success: false, message: 'Error deleting note' });
     }
   },
 
