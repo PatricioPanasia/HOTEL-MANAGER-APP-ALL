@@ -41,7 +41,8 @@ const TaskController = {
 
       // Ordenar y paginar
       const { data: tasks, error, count } = await query
-        .order('created_at', { ascending: false })
+        // Ordenar por fecha de creación real en nuestro esquema
+        .order('fecha_creacion', { ascending: false })
         .range(offset, offset + parseInt(limit) - 1);
 
       if (error) {
