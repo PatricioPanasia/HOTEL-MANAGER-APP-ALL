@@ -1,0 +1,42 @@
+# Node
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Env files
+.env
+.env.*
+**/.env
+**/.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo/React Native
+frontend/.expo/
+frontend/.expo-shared/
+frontend/web-build/
+frontend/.cache/
+
+# Android builds
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/app/debug.keystore
+
+# iOS (if present)
+frontend/ios/build/
+frontend/ios/Pods/
+
+# Backend
+backend/.env
+backend/.vercel/
+
+# Misc
+dist/
+build/
+**/tmp/
+**/logs/
