@@ -1,4 +1,5 @@
 const { query } = require('../config/database');
+const supabase = require('../config/supabase');
 
 const TaskController = {
   // Obtener todas las tareas
@@ -327,39 +328,60 @@ const TaskController = {
   // Obtener estadísticas de tareas
   getTaskStats: async (req, res) => {
     try {
-      console.log('📊 Getting task stats for user:', req.user.id);
+      console.log('📊 Getting task stats (Supabase) for user:', req.user.id);
 
-      let whereCondition = '';
-      let queryParams = [];
-
-      // Si no es admin, solo ver sus tareas
-      if (req.user.rol === 'recepcionista') {
-        whereCondition = 'WHERE (usuario_asignado = ? OR usuario_creador = ?)';
-        queryParams = [req.user.id, req.user.id];
+      if (!supabase) {
+        return res.status(500).json({ success: false, message: 'Supabase not configured' });
       }
 
-      const stats = await query(
-        `SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes,
-          SUM(CASE WHEN estado = 'en_progreso' THEN 1 ELSE 0 END) as en_progreso,
-          SUM(CASE WHEN estado = 'completada' THEN 1 ELSE 0 END) as completadas,
-          SUM(CASE WHEN estado = 'cancelada' THEN 1 ELSE 0 END) as canceladas,
-          SUM(CASE WHEN prioridad = 'alta' OR prioridad = 'urgente' THEN 1 ELSE 0 END) as prioritarias
-         FROM tareas ${whereCondition}`,
-        queryParams
-      );
+      const userId = req.user.id;
+      const isLimited = req.user.rol === 'recepcionista';
+
+      const base = supabase.from('tareas');
+
+      // Helper to count with optional filters
+      const countWhere = async (filters) => {
+        let q = base.select('*', { count: 'exact', head: true });
+        if (isLimited) {
+          q = q.or(`usuario_asignado.eq.${userId},usuario_creador.eq.${userId}`);
+        }
+        if (filters) {
+          Object.entries(filters).forEach(([k, v]) => {
+            q = q.eq(k, v);
+          });
+        }
+        const { count, error } = await q;
+        if (error) throw error;
+        return count || 0;
+      };
+
+      const [total, pendientes, en_progreso, completadas, canceladas, prioritarias] = await Promise.all([
+        countWhere(),
+        countWhere({ estado: 'pendiente' }),
+        countWhere({ estado: 'en_progreso' }),
+        countWhere({ estado: 'completada' }),
+        countWhere({ estado: 'cancelada' }),
+        // prioridad alta o urgente
+        (async () => {
+          let q = base
+            .select('*', { count: 'exact', head: true })
+            .or('prioridad.eq.alta,prioridad.eq.urgente');
+          if (isLimited) {
+            q = q.or(`usuario_asignado.eq.${userId},usuario_creador.eq.${userId}`);
+          }
+          const { count, error } = await q;
+          if (error) throw error;
+          return count || 0;
+        })(),
+      ]);
 
       res.json({
         success: true,
-        data: stats[0]
+        data: { total, pendientes, en_progreso, completadas, canceladas, prioritarias }
       });
     } catch (error) {
-      console.error('❌ Error fetching task stats:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching task stats: ' + error.message
-      });
+      console.error('❌ Error fetching task stats (Supabase):', error);
+      res.status(500).json({ success: false, message: 'Error fetching task stats' });
     }
   }
 };

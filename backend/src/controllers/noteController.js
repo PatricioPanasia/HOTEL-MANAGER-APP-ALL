@@ -1,4 +1,5 @@
 const { query } = require('../config/database');
+const supabase = require('../config/supabase');
 
 const NoteController = {
   // Obtener todas las notas
@@ -257,37 +258,27 @@ const NoteController = {
   // Obtener estadísticas de las notas
   getNoteStats: async (req, res) => {
     try {
-      const userId = req.user.id;
-      let whereClause = '';
-      let queryParams = [];
-
-      if (req.user.rol === 'admin') {
-        whereClause = '1=1'; // El admin ve todo
-      } else {
-        whereClause = '(usuario_id = ? OR tipo IN ("equipo", "general") OR usuario_asignado = ?)';
-        queryParams = [userId, userId];
+      if (!supabase) {
+        return res.status(500).json({ success: false, message: 'Supabase not configured' });
       }
 
-      const statsQuery = `
-        SELECT
-          COUNT(*) as total,
-          SUM(CASE WHEN importante = 1 THEN 1 ELSE 0 END) as importantes,
-          SUM(CASE WHEN tipo = 'personal' AND usuario_id = ? THEN 1 ELSE 0 END) as personales
-        FROM notas
-        WHERE ${whereClause}
-      `;
-      
-      // El primer '?' es para el conteo de 'personales', el resto son para el WHERE
-      const finalParams = [userId, ...queryParams];
+      const userId = req.user.id;
+      const isAdmin = req.user.rol === 'admin';
 
-      const stats = await query(statsQuery, finalParams);
+      let q = supabase.from('notas').select('id, importante, tipo, usuario_id', { count: 'exact' });
+      if (!isAdmin) {
+        q = q.or(`usuario_id.eq.${userId},tipo.eq.equipo,tipo.eq.general,usuario_asignado.eq.${userId}`);
+      }
+      const { data, error, count } = await q;
+      if (error) throw error;
 
-      res.json({
-        success: true,
-        data: stats[0]
-      });
+      const total = count || (data ? data.length : 0);
+      const importantes = (data || []).filter((n) => n.importante === true).length;
+      const personales = (data || []).filter((n) => n.tipo === 'personal' && n.usuario_id === userId).length;
+
+      res.json({ success: true, data: { total, importantes, personales } });
     } catch (error) {
-      console.error('❌ Error fetching note stats:', error);
+      console.error('❌ Error fetching note stats (Supabase):', error);
       res.status(500).json({ success: false, message: 'Error fetching note stats' });
     }
   },

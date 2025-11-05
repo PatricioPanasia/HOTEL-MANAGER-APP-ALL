@@ -1,4 +1,5 @@
 const { query } = require('../config/database');
+const supabase = require('../config/supabase');
 const moment = require('moment-timezone');
 
 const AttendanceController = {
@@ -262,32 +263,32 @@ const AttendanceController = {
   // Obtener estadísticas de asistencia
   getAttendanceStats: async (req, res) => {
     try {
-  const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
 
-      // Total de empleados (considerando activos si hubiera un campo `activo`)
-      const totalUsers = await query('SELECT COUNT(*) as total FROM usuarios WHERE activo = 1');
+      if (!supabase) {
+        return res.status(500).json({ success: false, message: 'Supabase not configured' });
+      }
 
-      // Total de presentes hoy (una entrada por usuario)
-      const presentToday = await query(
-        `SELECT COUNT(DISTINCT usuario_id) as total 
-         FROM asistencias 
-         WHERE fecha = ? AND hora_entrada IS NOT NULL`,
-        [fecha]
-      );
+      // total empleados activos en profiles
+      const { count: totalEmpleados, error: e1 } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .eq('activo', true);
+      if (e1) throw e1;
 
-      res.json({
-        success: true,
-        data: {
-          total_empleados: totalUsers[0].total,
-          presentes_hoy: presentToday[0].total
-        }
-      });
+      // presentes hoy: registros con hora_entrada en fecha
+      const { data: asistenciasHoy, error: e2 } = await supabase
+        .from('asistencias')
+        .select('usuario_id, fecha, hora_entrada')
+        .eq('fecha', fecha)
+        .not('hora_entrada', 'is', null);
+      if (e2) throw e2;
+      const presentes = new Set((asistenciasHoy || []).map((a) => a.usuario_id)).size;
+
+      res.json({ success: true, data: { total_empleados: totalEmpleados || 0, presentes_hoy: presentes } });
     } catch (error) {
-      console.error('Error fetching attendance stats:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error al obtener estadísticas de asistencia'
-      });
+      console.error('Error fetching attendance stats (Supabase):', error);
+      res.status(500).json({ success: false, message: 'Error al obtener estadísticas de asistencia' });
     }
   }
 };
