@@ -1,11 +1,10 @@
-const { query } = require('../config/database');
 const supabase = require('../config/supabase');
 
 const TaskController = {
   // Obtener todas las tareas
   getAllTasks: async (req, res) => {
     try {
-      console.log('🔍 Getting tasks for user:', req.user.id, 'Role:', req.user.rol);
+      console.log('[taskController.getAllTasks] Getting tasks for user:', req.user.id, 'Role:', req.user.rol);
       
       const { 
         page = 1, 
@@ -15,70 +14,59 @@ const TaskController = {
         usuario_asignado 
       } = req.query;
       
-      const offset = (page - 1) * limit;
-      let whereConditions = [];
-      let queryParams = [];
+      const offset = (page - 1) * parseInt(limit);
 
-      // Filtros
+      // Construir query base
+      let query = supabase
+        .from('tareas')
+        .select(`
+          *,
+          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
+          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
+        `, { count: 'exact' });
+
+      // Aplicar filtros
       if (estado) {
-        whereConditions.push('estado = ?');
-        queryParams.push(estado);
+        query = query.eq('estado', estado);
       }
 
       if (prioridad) {
-        whereConditions.push('prioridad = ?');
-        queryParams.push(prioridad);
+        query = query.eq('prioridad', prioridad);
       }
 
       if (usuario_asignado) {
-        whereConditions.push('usuario_asignado = ?');
-        queryParams.push(usuario_asignado);
+        query = query.eq('usuario_asignado', usuario_asignado);
       }
 
-      // Si no es admin, solo ver tareas asignadas o creadas por él
+      // Si no es admin/supervisor, solo ver tareas asignadas o creadas por él
       if (req.user.rol !== 'admin' && req.user.rol !== 'supervisor') {
-        whereConditions.push('(usuario_asignado = ? OR usuario_creador = ?)');
-        queryParams.push(req.user.id, req.user.id);
+        query = query.or(`usuario_asignado.eq.${req.user.id},usuario_creador.eq.${req.user.id}`);
       }
 
-      const whereClause = whereConditions.length > 0 
-        ? `WHERE ${whereConditions.join(' AND ')}` 
-        : '';
+      // Ordenar y paginar
+      const { data: tasks, error, count } = await query
+        .order('created_at', { ascending: false })
+        .range(offset, offset + parseInt(limit) - 1);
 
-      console.log('📋 Executing tasks query with conditions:', whereClause);
+      if (error) {
+        console.error('[taskController.getAllTasks] Supabase error:', error);
+        throw error;
+      }
 
-      const tasks = await query(
-        `SELECT t.*, 
-                ua.nombre as asignado_nombre,
-                uc.nombre as creador_nombre
-         FROM tareas t
-         LEFT JOIN usuarios ua ON t.usuario_asignado = ua.id
-         LEFT JOIN usuarios uc ON t.usuario_creador = uc.id
-         ${whereClause}
-         ORDER BY t.fecha_creacion DESC 
-         LIMIT ? OFFSET ?`,
-        [...queryParams, parseInt(limit), offset]
-      );
-
-      const countResult = await query(
-        `SELECT COUNT(*) as total FROM tareas ${whereClause}`,
-        queryParams
-      );
-
-      console.log('✅ Tasks fetched successfully:', tasks.length, 'tasks found');
+      console.log('[taskController.getAllTasks] Tasks fetched successfully:', tasks?.length || 0, 'tasks found');
 
       res.json({
         success: true,
-        data: tasks,
+        data: tasks || [],
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: countResult[0].total,
-          pages: Math.ceil(countResult[0].total / limit)
+          total: count || 0,
+          pages: Math.ceil((count || 0) / parseInt(limit))
         }
       });
     } catch (error) {
-      console.error('❌ Error fetching tasks:', error);
+      console.error('[taskController.getAllTasks] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error fetching tasks: ' + error.message
@@ -91,29 +79,27 @@ const TaskController = {
     try {
       const { id } = req.params;
 
-      console.log('🔍 Getting task by ID:', id, 'for user:', req.user.id);
+      console.log('[taskController.getTaskById] Getting task:', id, 'for user:', req.user.id);
 
-      const tasks = await query(
-        `SELECT t.*, 
-                ua.nombre as asignado_nombre,
-                uc.nombre as creador_nombre
-         FROM tareas t
-         LEFT JOIN usuarios ua ON t.usuario_asignado = ua.id
-         LEFT JOIN usuarios uc ON t.usuario_creador = uc.id
-         WHERE t.id = ?`,
-        [id]
-      );
+      const { data: task, error } = await supabase
+        .from('tareas')
+        .select(`
+          *,
+          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
+          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
+        `)
+        .eq('id', id)
+        .single();
 
-      if (tasks.length === 0) {
+      if (error || !task) {
+        console.error('[taskController.getTaskById] Task not found or error:', error);
         return res.status(404).json({
           success: false,
           message: 'Task not found'
         });
       }
 
-      const task = tasks[0];
-
-      // Verificar permisos (solo admin, supervisor o el asignado pueden ver)
+      // Verificar permisos
       if (req.user.rol !== 'admin' && 
           req.user.rol !== 'supervisor' && 
           task.usuario_asignado !== req.user.id && 
@@ -129,7 +115,7 @@ const TaskController = {
         data: task
       });
     } catch (error) {
-      console.error('❌ Error fetching task:', error);
+      console.error('[taskController.getTaskById] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error fetching task: ' + error.message
@@ -148,9 +134,9 @@ const TaskController = {
         fecha_limite 
       } = req.body;
 
-      console.log('📝 Creating task for user:', req.user.id, 'Data:', req.body);
+      console.log('[taskController.createTask] Creating task for user:', req.user.id, 'Data:', req.body);
 
-      if (!titulo) {
+      if (!titulo || !titulo.trim()) {
         return res.status(400).json({
           success: false,
           message: 'Title is required'
@@ -163,41 +149,40 @@ const TaskController = {
         usuarioAsignadoFinal = req.user.id; // Auto-asignarse
       }
 
-      const result = await query(
-        `INSERT INTO tareas 
-         (titulo, descripcion, usuario_asignado, usuario_creador, prioridad, fecha_limite) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          titulo, 
-          descripcion, 
-          usuarioAsignadoFinal, 
-          req.user.id, 
-          prioridad || 'media',
-          fecha_limite || null
-        ]
-      );
+      const taskData = {
+        titulo: titulo.trim(),
+        descripcion: descripcion || null,
+        usuario_asignado: usuarioAsignadoFinal || req.user.id,
+        usuario_creador: req.user.id,
+        prioridad: prioridad || 'media',
+        estado: 'pendiente',
+        fecha_limite: fecha_limite || null
+      };
 
-      console.log('✅ Task created with ID:', result.insertId);
+      const { data: newTask, error } = await supabase
+        .from('tareas')
+        .insert([taskData])
+        .select(`
+          *,
+          asignado:profiles!tareas_usuario_asignado_fkey(id, nombre, email),
+          creador:profiles!tareas_usuario_creador_fkey(id, nombre, email)
+        `)
+        .single();
 
-      // Obtener la tarea creada con información de usuarios
-      const newTask = await query(
-        `SELECT t.*, 
-                ua.nombre as asignado_nombre,
-                uc.nombre as creador_nombre
-         FROM tareas t
-         LEFT JOIN usuarios ua ON t.usuario_asignado = ua.id
-         LEFT JOIN usuarios uc ON t.usuario_creador = uc.id
-         WHERE t.id = ?`,
-        [result.insertId]
-      );
+      if (error) {
+        console.error('[taskController.createTask] Supabase error:', error);
+        throw error;
+      }
+
+      console.log('[taskController.createTask] Task created with ID:', newTask.id);
 
       res.status(201).json({
         success: true,
         message: 'Task created successfully',
-        data: newTask[0]
+        data: newTask
       });
     } catch (error) {
-      console.error('❌ Error creating task:', error);
+      console.error('[taskController.createTask] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error creating task: ' + error.message
@@ -211,24 +196,23 @@ const TaskController = {
       const { id } = req.params;
       const updates = req.body;
 
-      console.log('📝 Updating task:', id, 'by user:', req.user.id, 'Updates:', updates);
+      console.log('[taskController.updateTask] Updating task:', id, 'by user:', req.user.id, 'Updates:', updates);
 
       // Verificar que la tarea existe
-      const existingTask = await query(
-        'SELECT * FROM tareas WHERE id = ?',
-        [id]
-      );
+      const { data: task, error: fetchError } = await supabase
+        .from('tareas')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-      if (existingTask.length === 0) {
+      if (fetchError || !task) {
         return res.status(404).json({
           success: false,
           message: 'Task not found'
         });
       }
 
-      const task = existingTask[0];
-
-      // Verificar permisos (solo admin, supervisor o el asignado pueden editar)
+      // Verificar permisos
       if (req.user.rol !== 'admin' && 
           req.user.rol !== 'supervisor' && 
           task.usuario_asignado !== req.user.id) {
@@ -238,39 +222,41 @@ const TaskController = {
         });
       }
 
-      // Construir query dinámica
-      const updateFields = [];
-      const updateValues = [];
-
-      Object.keys(updates).forEach(key => {
-        if (['titulo', 'descripcion', 'estado', 'prioridad', 'fecha_limite', 'usuario_asignado'].includes(key)) {
-          updateFields.push(`${key} = ?`); // Asegurarse de que el frontend envíe null para fecha_limite si se vacía
-          updateValues.push(updates[key]);
+      // Construir objeto de actualización
+      const updateData = {};
+      const allowedFields = ['titulo', 'descripcion', 'estado', 'prioridad', 'fecha_limite', 'usuario_asignado'];
+      
+      allowedFields.forEach(field => {
+        if (updates.hasOwnProperty(field)) {
+          updateData[field] = updates[field];
         }
       });
 
-      // Si se marca como completada, agregar fecha de completado
+      // Si se marca como completada, agregar fecha
       if (updates.estado === 'completada' && task.estado !== 'completada') {
-        updateFields.push('fecha_completado = NOW()');
-      } else if (updates.estado !== 'completada' && updates.estado !== undefined) {
-        updateFields.push('fecha_completado = NULL');
+        updateData.fecha_completado = new Date().toISOString();
+      } else if (updates.estado && updates.estado !== 'completada') {
+        updateData.fecha_completado = null;
       }
 
-      updateValues.push(id);
+      const { error: updateError } = await supabase
+        .from('tareas')
+        .update(updateData)
+        .eq('id', id);
 
-      await query(
-        `UPDATE tareas SET ${updateFields.join(', ')} WHERE id = ?`,
-        updateValues
-      );
+      if (updateError) {
+        console.error('[taskController.updateTask] Supabase error:', updateError);
+        throw updateError;
+      }
 
-      console.log('✅ Task updated successfully:', id);
+      console.log('[taskController.updateTask] Task updated successfully:', id);
 
       res.json({
         success: true,
         message: 'Task updated successfully'
       });
     } catch (error) {
-      console.error('❌ Error updating task:', error);
+      console.error('[taskController.updateTask] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error updating task: ' + error.message
@@ -283,24 +269,23 @@ const TaskController = {
     try {
       const { id } = req.params;
 
-      console.log('🗑️ Deleting task:', id, 'by user:', req.user.id);
+      console.log('[taskController.deleteTask] Deleting task:', id, 'by user:', req.user.id);
 
       // Verificar que la tarea existe
-      const existingTask = await query(
-        'SELECT * FROM tareas WHERE id = ?',
-        [id]
-      );
+      const { data: task, error: fetchError } = await supabase
+        .from('tareas')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-      if (existingTask.length === 0) {
+      if (fetchError || !task) {
         return res.status(404).json({
           success: false,
           message: 'Task not found'
         });
       }
 
-      const task = existingTask[0];
-
-      // Verificar permisos (solo admin y supervisor pueden eliminar)
+      // Verificar permisos
       if (req.user.rol !== 'admin' && req.user.rol !== 'supervisor') {
         return res.status(403).json({
           success: false,
@@ -308,16 +293,24 @@ const TaskController = {
         });
       }
 
-      await query('DELETE FROM tareas WHERE id = ?', [id]);
+      const { error: deleteError } = await supabase
+        .from('tareas')
+        .delete()
+        .eq('id', id);
 
-      console.log('✅ Task deleted successfully:', id);
+      if (deleteError) {
+        console.error('[taskController.deleteTask] Supabase error:', deleteError);
+        throw deleteError;
+      }
+
+      console.log('[taskController.deleteTask] Task deleted successfully:', id);
 
       res.json({
         success: true,
         message: 'Task deleted successfully'
       });
     } catch (error) {
-      console.error('❌ Error deleting task:', error);
+      console.error('[taskController.deleteTask] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error deleting task: ' + error.message
@@ -328,7 +321,7 @@ const TaskController = {
   // Obtener estadísticas de tareas
   getTaskStats: async (req, res) => {
     try {
-      console.log('📊 Getting task stats (Supabase) for user:', req.user.id);
+      console.log('[taskController.getTaskStats] Getting task stats for user:', req.user.id);
 
       if (!supabase) {
         return res.status(500).json({ success: false, message: 'Supabase not configured' });
@@ -380,7 +373,7 @@ const TaskController = {
         data: { total, pendientes, en_progreso, completadas, canceladas, prioritarias }
       });
     } catch (error) {
-      console.error('❌ Error fetching task stats (Supabase):', error);
+      console.error('[taskController.getTaskStats] Error:', error);
       res.status(500).json({ success: false, message: 'Error fetching task stats' });
     }
   }
