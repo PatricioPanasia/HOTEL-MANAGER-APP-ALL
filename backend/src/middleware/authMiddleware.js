@@ -1,27 +1,14 @@
-// Supabase JWT verification middleware using JWKS
+// Supabase JWT verification middleware
 const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
 const supabase = require('../config/supabase');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mkflmlbqfdcvdnknmkmt.supabase.co';
+const JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 const JWT_ISSUER = process.env.JWT_ISSUER || `${SUPABASE_URL}/auth/v1`;
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'authenticated';
 
-// JWKS client to fetch Supabase public keys
-const client = jwksClient({
-  jwksUri: `${SUPABASE_URL}/auth/v1/keys`,
-  cache: true,
-  rateLimit: true,
-});
-
-function getKey(header, callback) {
-  client.getSigningKey(header.kid, (err, key) => {
-    if (err) {
-      return callback(err);
-    }
-    const signingKey = key.getPublicKey();
-    callback(null, signingKey);
-  });
+if (!JWT_SECRET) {
+  console.error('⚠️  SUPABASE_JWT_SECRET not configured! JWT verification will fail.');
 }
 
 const authenticateToken = async (req, res, next) => {
@@ -36,21 +23,11 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    // Verify JWT using Supabase JWKS
-    const decoded = await new Promise((resolve, reject) => {
-      jwt.verify(
-        token,
-        getKey,
-        {
-          audience: JWT_AUDIENCE,
-          issuer: JWT_ISSUER,
-          algorithms: ['RS256'],
-        },
-        (err, decoded) => {
-          if (err) return reject(err);
-          resolve(decoded);
-        }
-      );
+    // Verify JWT using Supabase JWT secret (HS256)
+    const decoded = jwt.verify(token, JWT_SECRET, {
+      audience: JWT_AUDIENCE,
+      issuer: JWT_ISSUER,
+      algorithms: ['HS256'],
     });
 
     // Extract user ID from sub claim (UUID)
