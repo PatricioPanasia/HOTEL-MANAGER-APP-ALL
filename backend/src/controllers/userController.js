@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const { query } = require('../config/database');
+const supabase = require('../config/supabase');
 
 const UserController = {
   // Obtener todos los usuarios (solo admin)
@@ -8,39 +8,29 @@ const UserController = {
       const { page = 1, limit = 10, search = '', activo = 'true' } = req.query;
       const offset = (page - 1) * limit;
 
-      // Allow fetching active, inactive or all users via `activo` query param
-      // activo = 'true' (default) => only active users
-      // activo = 'false' => only inactive users
-      // activo = 'all' => all users
-      const whereConditions = [];
-      const queryParams = [];
+      // Build query
+      let query = supabase.from('profiles').select('*', { count: 'exact' });
 
+      // Filter by activo
       if (activo === 'true') {
-        whereConditions.push('activo = TRUE');
+        query = query.eq('activo', true);
       } else if (activo === 'false') {
-        whereConditions.push('activo = FALSE');
+        query = query.eq('activo', false);
       }
 
+      // Search filter
       if (search) {
-        whereConditions.push('(nombre LIKE ? OR email LIKE ?)');
-        queryParams.push(`%${search}%`, `%${search}%`);
+        query = query.or(`nombre.ilike.%${search}%,email.ilike.%${search}%`);
       }
 
-      const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
+      // Pagination and ordering
+      query = query
+        .order('created_at', { ascending: false })
+        .range(offset, offset + parseInt(limit) - 1);
 
-      const users = await query(
-        `SELECT id, nombre, email, rol, activo, fecha_creacion 
-         FROM usuarios 
-         ${whereClause}
-         ORDER BY fecha_creacion DESC 
-         LIMIT ? OFFSET ?`,
-        [...queryParams, parseInt(limit), offset]
-      );
+      const { data: users, error, count } = await query;
 
-      const countResult = await query(
-        `SELECT COUNT(*) as total FROM usuarios ${whereClause}`,
-        queryParams
-      );
+      if (error) throw error;
 
       res.json({
         success: true,
@@ -48,11 +38,12 @@ const UserController = {
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: countResult[0].total,
-          pages: Math.ceil(countResult[0].total / limit)
+          total: count || 0,
+          pages: Math.ceil((count || 0) / limit)
         }
       });
     } catch (error) {
+      console.error('[userController.getAllUsers] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error fetching users'
@@ -65,13 +56,13 @@ const UserController = {
     try {
       const { id } = req.params;
 
-      const users = await query(
-        `SELECT id, nombre, email, rol, activo, fecha_creacion 
-         FROM usuarios WHERE id = ?`,
-        [id]
-      );
+      const { data: user, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-      if (users.length === 0) {
+      if (error || !user) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
@@ -80,9 +71,10 @@ const UserController = {
 
       res.json({
         success: true,
-        data: users[0]
+        data: user
       });
     } catch (error) {
+      console.error('[userController.getUserById] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error fetching user'
@@ -90,52 +82,44 @@ const UserController = {
     }
   },
 
-  // Crear nuevo usuario (solo admin)
+  // Crear nuevo usuario (solo admin) - Note: with Supabase Auth, user creation is handled differently
+  // This endpoint can update a profile after Supabase Auth creates the user
   createUser: async (req, res) => {
     try {
-      const { nombre, email, password, rol } = req.body;
+      const { nombre, email, rol } = req.body;
 
-      // Validaciones
-      if (!nombre || !email || !password) {
+      // Validations
+      if (!nombre || !email) {
         return res.status(400).json({
           success: false,
-          message: 'Name, email and password are required'
+          message: 'Name and email are required'
         });
       }
 
-      // Verificar si el email ya existe
-      const existingUser = await query(
-        'SELECT id FROM usuarios WHERE email = ?',
-        [email]
-      );
+      // Check if profile already exists
+      const { data: existing } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', email)
+        .single();
 
-      if (existingUser.length > 0) {
+      if (existing) {
         return res.status(409).json({
           success: false,
           message: 'Email already registered'
         });
       }
 
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Note: In Supabase, user creation is done via Auth.
+      // This is a simplified version that assumes Auth already created the user.
+      // You might want to use Supabase Admin API to create auth users if needed.
 
-      // Insertar usuario
-      const result = await query(
-        'INSERT INTO usuarios (nombre, email, password, rol) VALUES (?, ?, ?, ?)',
-        [nombre, email, hashedPassword, rol || 'recepcionista']
-      );
-
-      res.status(201).json({
-        success: true,
-        message: 'User created successfully',
-        data: {
-          id: result.insertId,
-          nombre,
-          email,
-          rol: rol || 'recepcionista'
-        }
+      res.status(400).json({
+        success: false,
+        message: 'User creation must be done via Supabase Auth + Google OAuth. Use update endpoint to modify profiles.'
       });
     } catch (error) {
+      console.error('[userController.createUser] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error creating user'
@@ -149,30 +133,40 @@ const UserController = {
       const { id } = req.params;
       const { nombre, email, rol, activo } = req.body;
 
-      // Verificar que el usuario existe
-      const existingUser = await query(
-        'SELECT id FROM usuarios WHERE id = ?',
-        [id]
-      );
+      // Check if user exists
+      const { data: existing, error: fetchError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', id)
+        .single();
 
-      if (existingUser.length === 0) {
+      if (fetchError || !existing) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
 
-      // Actualizar usuario
-      await query(
-        'UPDATE usuarios SET nombre = ?, email = ?, rol = ?, activo = ? WHERE id = ?',
-        [nombre, email, rol, activo, id]
-      );
+      // Build update object
+      const updates = {};
+      if (nombre !== undefined) updates.nombre = nombre;
+      if (email !== undefined) updates.email = email;
+      if (rol !== undefined) updates.rol = rol;
+      if (activo !== undefined) updates.activo = activo;
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', id);
+
+      if (updateError) throw updateError;
 
       res.json({
         success: true,
         message: 'User updated successfully'
       });
     } catch (error) {
+      console.error('[userController.updateUser] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error updating user'
@@ -186,23 +180,26 @@ const UserController = {
       const { id } = req.params;
 
       // No permitir auto-eliminación
-      if (parseInt(id) === req.user.id) {
+      if (id === req.user.id) {
         return res.status(400).json({
           success: false,
           message: 'Cannot delete your own account'
         });
       }
 
-      await query(
-        'UPDATE usuarios SET activo = FALSE WHERE id = ?',
-        [id]
-      );
+      const { error } = await supabase
+        .from('profiles')
+        .update({ activo: false })
+        .eq('id', id);
+
+      if (error) throw error;
 
       res.json({
         success: true,
         message: 'User deleted successfully'
       });
     } catch (error) {
+      console.error('[userController.deleteUser] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error deleting user'
@@ -213,17 +210,25 @@ const UserController = {
   // Obtener perfil del usuario actual
   getProfile: async (req, res) => {
     try {
-      const user = await query(
-        `SELECT id, nombre, email, rol, activo, fecha_creacion 
-         FROM usuarios WHERE id = ?`,
-        [req.user.id]
-      );
+      const { data: user, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user.id)
+        .single();
+
+      if (error || !user) {
+        return res.status(404).json({
+          success: false,
+          message: 'Profile not found'
+        });
+      }
 
       res.json({
         success: true,
-        data: user[0]
+        data: user
       });
     } catch (error) {
+      console.error('[userController.getProfile] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error fetching profile'
@@ -236,16 +241,23 @@ const UserController = {
     try {
       const { nombre, email } = req.body;
 
-      await query(
-        'UPDATE usuarios SET nombre = ?, email = ? WHERE id = ?',
-        [nombre, email, req.user.id]
-      );
+      const updates = {};
+      if (nombre !== undefined) updates.nombre = nombre;
+      if (email !== undefined) updates.email = email;
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', req.user.id);
+
+      if (error) throw error;
 
       res.json({
         success: true,
         message: 'Profile updated successfully'
       });
     } catch (error) {
+      console.error('[userController.updateProfile] Error:', error);
       res.status(500).json({
         success: false,
         message: 'Error updating profile'
@@ -257,32 +269,30 @@ const UserController = {
     try {
       const { id } = req.params;
 
-      // 1. Obtener estadísticas de tareas
-      const taskStatsQuery = query(
-        `SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes,
-          SUM(CASE WHEN estado = 'en_progreso' THEN 1 ELSE 0 END) as en_progreso,
-          SUM(CASE WHEN estado = 'completada' THEN 1 ELSE 0 END) as completadas
-         FROM tareas 
-         WHERE usuario_asignado = ?`,
-        [id]
-      );
+      // 1. Task stats using Supabase
+      const { data: tasks, error: tasksError } = await supabase
+        .from('tareas')
+        .select('estado')
+        .eq('usuario_asignado', id);
 
-      // 2. Obtener historial de asistencia (últimos 30 días)
-      const attendanceHistoryQuery = query(
-        `SELECT fecha, hora_entrada, hora_salida, tipo, ubicacion 
-         FROM asistencias 
-         WHERE usuario_id = ? 
-         ORDER BY fecha DESC
-         LIMIT 30`,
-        [id]
-      );
+      if (tasksError) throw tasksError;
 
-      const [[taskStats], attendanceHistory] = await Promise.all([
-        taskStatsQuery,
-        attendanceHistoryQuery,
-      ]);
+      const taskStats = {
+        total: tasks.length,
+        pendientes: tasks.filter(t => t.estado === 'pendiente').length,
+        en_progreso: tasks.filter(t => t.estado === 'en_progreso').length,
+        completadas: tasks.filter(t => t.estado === 'completada').length,
+      };
+
+      // 2. Attendance history (last 30 days)
+      const { data: attendanceHistory, error: attendanceError } = await supabase
+        .from('asistencias')
+        .select('fecha, hora_entrada, hora_salida, tipo, ubicacion')
+        .eq('usuario_id', id)
+        .order('fecha', { ascending: false })
+        .limit(30);
+
+      if (attendanceError) throw attendanceError;
 
       res.json({
         success: true,
@@ -292,7 +302,7 @@ const UserController = {
         },
       });
     } catch (error) {
-      console.error(`Error fetching stats for user ${req.params.id}:`, error);
+      console.error(`[userController.getUserStats] Error for user ${req.params.id}:`, error);
       res.status(500).json({
         success: false,
         message: 'Error fetching user statistics',
