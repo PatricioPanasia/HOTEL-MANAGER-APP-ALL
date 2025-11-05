@@ -20,21 +20,21 @@ router.put('/profile', authenticateToken, UserController.updateProfile);
 router.get('/:id', 
   authenticateToken, 
   authorizeRoles('admin', 'supervisor'),
-  [param('id').isInt().withMessage('Invalid user ID')],
+  [param('id').isUUID().withMessage('Invalid user ID')],
   UserController.getUserById
 );
 
 router.put('/:id', 
   authenticateToken,
   authorizeRoles('admin', 'supervisor'),
-  [param('id').isInt().withMessage('Invalid user ID')],
+  [param('id').isUUID().withMessage('Invalid user ID')],
   UserController.updateUser
 );
 
 router.delete('/:id', 
   authenticateToken,
   authorizeRoles('admin', 'supervisor'),
-  [param('id').isInt().withMessage('Invalid user ID')],
+  [param('id').isUUID().withMessage('Invalid user ID')],
   UserController.deleteUser
 );
 

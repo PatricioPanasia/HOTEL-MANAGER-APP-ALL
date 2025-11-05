@@ -23,16 +23,42 @@ const app = express();
 const isVercel = process.env.VERCEL === '1';
 const apiPrefix = isVercel ? '' : '/api';
 
+// CORS configuration (allow frontend + local dev)
+const allowedOrigins = [
+  'https://hotel-manager-frontend.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+];
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// Middleware
+// Middleware (CORS MUST come before anything that can send a response)
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(helmet());
 app.use(limiter);
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

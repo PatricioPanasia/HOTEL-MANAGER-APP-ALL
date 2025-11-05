@@ -171,7 +171,19 @@ const AttendanceController = {
       const usuario_id = req.user.id;
       const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
 
-      // Verificar registros del día
+      // Buscar si hay alguna entrada abierta (sin salida)
+      const { data: openEntry, error: openErr2 } = await supabase
+        .from('asistencias')
+        .select('*')
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha)
+        .not('hora_entrada', 'is', null)
+        .is('hora_salida', null)
+        .order('id', { ascending: false })
+        .limit(1);
+      if (openErr2) throw openErr2;
+
+      // Verificar total de registros del día (filas)
       const { count: totalRegistros, error: cntErr } = await supabase
         .from('asistencias')
         .select('*', { count: 'exact', head: true })
@@ -179,8 +191,8 @@ const AttendanceController = {
         .eq('fecha', fecha);
       if (cntErr) throw cntErr;
 
-      // Si ya tiene 4 registros completos (4 pares), jornada finalizada
-      if ((totalRegistros || 0) >= 4) {
+      // Si ya tiene 4 filas y NO hay entrada abierta, jornada finalizada
+      if ((totalRegistros || 0) >= 4 && !(openEntry && openEntry.length > 0)) {
         const { data: lastCompleteEntry, error: lastErr } = await supabase
           .from('asistencias')
           .select('*')
@@ -203,18 +215,6 @@ const AttendanceController = {
           }
         });
       }
-
-      // Buscar si hay alguna entrada abierta (sin salida)
-      const { data: openEntry, error: openErr2 } = await supabase
-        .from('asistencias')
-        .select('*')
-        .eq('usuario_id', usuario_id)
-        .eq('fecha', fecha)
-        .not('hora_entrada', 'is', null)
-        .is('hora_salida', null)
-        .order('id', { ascending: false })
-        .limit(1);
-      if (openErr2) throw openErr2;
 
       let status = 'no_registrado';
       let lastAction = null;
