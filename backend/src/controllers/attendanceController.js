@@ -1,4 +1,3 @@
-const { query } = require('../config/database');
 const supabase = require('../config/supabase');
 const moment = require('moment-timezone');
 
@@ -8,31 +7,34 @@ const AttendanceController = {
     try {
       const { ubicacion, observaciones } = req.body;
       const usuario_id = req.user.id;
-  const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
-  const hora_entrada = moment().tz('America/Argentina/Buenos_Aires').format('HH:mm:ss');
+      const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      const hora_entrada = moment().tz('America/Argentina/Buenos_Aires').format('HH:mm:ss');
 
       // Verify there's no open entry (hora_salida IS NULL)
-      const openEntry = await query(
-        'SELECT id FROM asistencias WHERE usuario_id = ? AND fecha = ? AND hora_salida IS NULL',
-        [usuario_id, fecha]
-      );
+      const { data: openEntry, error: openErr } = await supabase
+        .from('asistencias')
+        .select('id')
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha)
+        .is('hora_salida', null);
+      if (openErr) throw openErr;
 
-      if (openEntry.length > 0) {
+      if ((openEntry || []).length > 0) {
         return res.status(400).json({
           success: false,
           message: 'Ya hay una entrada sin salida. Registra primero la salida antes de una nueva entrada.'
         });
       }
 
-      // Contar cantidad de pares entrada/salida del día (máximo 4 pares)
-      const registros = await query(
-        'SELECT COUNT(*) as total FROM asistencias WHERE usuario_id = ? AND fecha = ?',
-        [usuario_id, fecha]
-      );
+      // Contar cantidad de registros del día (máximo 4)
+      const { count: totalRegistros, error: cntErr } = await supabase
+        .from('asistencias')
+        .select('*', { count: 'exact', head: true })
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha);
+      if (cntErr) throw cntErr;
       
-      const totalRegistros = registros[0].total;
-      
-      if (totalRegistros >= 4) {
+      if ((totalRegistros || 0) >= 4) {
         return res.status(400).json({
           success: false,
           message: 'Has alcanzado el máximo de 4 pares de entrada/salida para hoy.'
@@ -40,16 +42,19 @@ const AttendanceController = {
       }
 
       // Registrar entrada
-      const result = await query(
-        'INSERT INTO asistencias (usuario_id, fecha, hora_entrada, tipo, ubicacion, observaciones) VALUES (?, ?, ?, ?, ?, ?)',
-        [usuario_id, fecha, hora_entrada, 'entrada', ubicacion, observaciones]
-      );
+      const insertData = { usuario_id, fecha, hora_entrada, tipo: 'entrada', ubicacion, observaciones };
+      const { data: inserted, error: insErr } = await supabase
+        .from('asistencias')
+        .insert([insertData])
+        .select('id, fecha, hora_entrada')
+        .single();
+      if (insErr) throw insErr;
 
       res.status(201).json({
         success: true,
         message: 'Entrada registrada exitosamente',
         data: {
-          id: result.insertId,
+          id: inserted.id,
           fecha,
           hora_entrada,
           ubicacion
@@ -69,17 +74,22 @@ const AttendanceController = {
     try {
       const { ubicacion, observaciones } = req.body;
       const usuario_id = req.user.id;
-  const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
-  const hora_salida = moment().tz('America/Argentina/Buenos_Aires').format('HH:mm:ss');
+      const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      const hora_salida = moment().tz('America/Argentina/Buenos_Aires').format('HH:mm:ss');
 
-      // Buscar registro de entrada de hoy
-      // Find the most recent open entry (without salida)
-      const existingEntry = await query(
-        'SELECT id, hora_entrada FROM asistencias WHERE usuario_id = ? AND fecha = ? AND hora_entrada IS NOT NULL AND hora_salida IS NULL ORDER BY id DESC LIMIT 1',
-        [usuario_id, fecha]
-      );
+      // Buscar la entrada abierta más reciente
+      const { data: existing, error: exErr } = await supabase
+        .from('asistencias')
+        .select('id, hora_entrada')
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha)
+        .not('hora_entrada', 'is', null)
+        .is('hora_salida', null)
+        .order('id', { ascending: false })
+        .limit(1);
+      if (exErr) throw exErr;
 
-      if (existingEntry.length === 0) {
+      if (!existing || existing.length === 0) {
         return res.status(400).json({
           success: false,
           message: 'No hay una entrada abierta para hoy. Registra una entrada primero.'
@@ -87,17 +97,18 @@ const AttendanceController = {
       }
 
       // Registrar salida
-      await query(
-        'UPDATE asistencias SET hora_salida = ?, tipo = ?, ubicacion = ?, observaciones = ? WHERE id = ?',
-        [hora_salida, 'salida', ubicacion, observaciones, existingEntry[0].id]
-      );
+      const { error: updErr } = await supabase
+        .from('asistencias')
+        .update({ hora_salida, tipo: 'salida', ubicacion, observaciones })
+        .eq('id', existing[0].id);
+      if (updErr) throw updErr;
 
       res.json({
         success: true,
         message: 'Salida registrada exitosamente',
         data: {
           fecha,
-          hora_entrada: existingEntry[0].hora_entrada,
+          hora_entrada: existing[0].hora_entrada,
           hora_salida
         }
       });
@@ -113,60 +124,36 @@ const AttendanceController = {
   // Obtener historial de asistencias
   getAttendance: async (req, res) => {
     try {
-  const { page = 1, limit = 10, start_date, end_date, usuario_id } = req.query;
-      const offset = (page - 1) * limit;
+      const { page = 1, limit = 10, start_date, end_date, usuario_id } = req.query;
+      const offset = (page - 1) * parseInt(limit);
 
-      let whereConditions = ['1=1'];
-      let queryParams = [];
+      let q = supabase.from('asistencias').select('*', { count: 'exact' });
 
       // Filtro por usuario
       if (usuario_id && (req.user.rol === 'admin' || req.user.rol === 'supervisor')) {
-        whereConditions.push('a.usuario_id = ?');
-        queryParams.push(usuario_id);
+        q = q.eq('usuario_id', usuario_id);
       } else if (req.user.rol !== 'admin' && req.user.rol !== 'supervisor') {
-        // Recepcionistas solo ven sus propias asistencias
-        whereConditions.push('a.usuario_id = ?');
-        queryParams.push(req.user.id);
+        q = q.eq('usuario_id', req.user.id);
       }
 
-      // Filtro por fecha
-      if (start_date) {
-        whereConditions.push('a.fecha >= ?');
-        queryParams.push(start_date);
-      }
+      // Filtro por fechas
+      if (start_date) q = q.gte('fecha', start_date);
+      if (end_date) q = q.lte('fecha', end_date);
 
-      if (end_date) {
-        whereConditions.push('a.fecha <= ?');
-        queryParams.push(end_date);
-      }
-
-      const whereClause = whereConditions.join(' AND ');
-
-      const attendance = await query(
-        `SELECT a.*, u.nombre as usuario_nombre, u.rol as usuario_rol
-         FROM asistencias a
-         JOIN usuarios u ON a.usuario_id = u.id
-         WHERE ${whereClause}
-         ORDER BY a.fecha DESC, a.hora_entrada DESC
-         LIMIT ? OFFSET ?`,
-        [...queryParams, parseInt(limit), offset]
-      );
-
-      const countResult = await query(
-        `SELECT COUNT(*) as total 
-         FROM asistencias a 
-         WHERE ${whereClause}`,
-        queryParams
-      );
+      const { data: attendance, error, count } = await q
+        .order('fecha', { ascending: false })
+        .order('hora_entrada', { ascending: false })
+        .range(offset, offset + parseInt(limit) - 1);
+      if (error) throw error;
 
       res.json({
         success: true,
-        data: attendance,
+        data: attendance || [],
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
-          total: countResult[0].total,
-          pages: Math.ceil(countResult[0].total / limit)
+          total: count || 0,
+          pages: Math.ceil((count || 0) / parseInt(limit))
         }
       });
     } catch (error) {
@@ -182,26 +169,33 @@ const AttendanceController = {
   getCurrentStatus: async (req, res) => {
     try {
       const usuario_id = req.user.id;
-  const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      const fecha = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
 
-      // Primero, verificar si ya alcanzó el máximo de 4 pares
-      const totalRegistros = await query(
-        'SELECT COUNT(*) as total FROM asistencias WHERE usuario_id = ? AND fecha = ?',
-        [usuario_id, fecha]
-      );
+      // Verificar registros del día
+      const { count: totalRegistros, error: cntErr } = await supabase
+        .from('asistencias')
+        .select('*', { count: 'exact', head: true })
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha);
+      if (cntErr) throw cntErr;
 
       // Si ya tiene 4 registros completos (4 pares), jornada finalizada
-      if (totalRegistros[0].total >= 4) {
-        const lastCompleteEntry = await query(
-          'SELECT * FROM asistencias WHERE usuario_id = ? AND fecha = ? AND hora_salida IS NOT NULL ORDER BY id DESC LIMIT 1',
-          [usuario_id, fecha]
-        );
+      if ((totalRegistros || 0) >= 4) {
+        const { data: lastCompleteEntry, error: lastErr } = await supabase
+          .from('asistencias')
+          .select('*')
+          .eq('usuario_id', usuario_id)
+          .eq('fecha', fecha)
+          .not('hora_salida', 'is', null)
+          .order('id', { ascending: false })
+          .limit(1);
+        if (lastErr) throw lastErr;
 
         return res.json({
           success: true,
           data: {
             status: 'jornada_finalizada',
-            lastAction: lastCompleteEntry.length > 0 ? {
+            lastAction: (lastCompleteEntry && lastCompleteEntry.length > 0) ? {
               tipo: 'salida',
               hora: lastCompleteEntry[0].hora_salida
             } : null,
@@ -211,15 +205,21 @@ const AttendanceController = {
       }
 
       // Buscar si hay alguna entrada abierta (sin salida)
-      const openEntry = await query(
-        'SELECT * FROM asistencias WHERE usuario_id = ? AND fecha = ? AND hora_entrada IS NOT NULL AND hora_salida IS NULL ORDER BY id DESC LIMIT 1',
-        [usuario_id, fecha]
-      );
+      const { data: openEntry, error: openErr2 } = await supabase
+        .from('asistencias')
+        .select('*')
+        .eq('usuario_id', usuario_id)
+        .eq('fecha', fecha)
+        .not('hora_entrada', 'is', null)
+        .is('hora_salida', null)
+        .order('id', { ascending: false })
+        .limit(1);
+      if (openErr2) throw openErr2;
 
       let status = 'no_registrado';
       let lastAction = null;
 
-      if (openEntry.length > 0) {
+      if (openEntry && openEntry.length > 0) {
         // Hay una entrada abierta
         status = 'entrada_registrada';
         lastAction = {
@@ -228,17 +228,23 @@ const AttendanceController = {
         };
       } else {
         // No hay entrada abierta, verificar si hay algún registro cerrado
-        const lastCompleteEntry = await query(
-          'SELECT * FROM asistencias WHERE usuario_id = ? AND fecha = ? AND hora_entrada IS NOT NULL AND hora_salida IS NOT NULL ORDER BY id DESC LIMIT 1',
-          [usuario_id, fecha]
-        );
+        const { data: lastCompleteEntry2, error: lastErr2 } = await supabase
+          .from('asistencias')
+          .select('*')
+          .eq('usuario_id', usuario_id)
+          .eq('fecha', fecha)
+          .not('hora_entrada', 'is', null)
+          .not('hora_salida', 'is', null)
+          .order('id', { ascending: false })
+          .limit(1);
+        if (lastErr2) throw lastErr2;
 
-        if (lastCompleteEntry.length > 0) {
+        if (lastCompleteEntry2 && lastCompleteEntry2.length > 0) {
           // Ya hay al menos un par entrada/salida cerrado, pero puede fichar de nuevo
           status = 'no_registrado';
           lastAction = {
             tipo: 'salida',
-            hora: lastCompleteEntry[0].hora_salida
+            hora: lastCompleteEntry2[0].hora_salida
           };
         }
       }
