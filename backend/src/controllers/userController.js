@@ -82,48 +82,67 @@ const UserController = {
     }
   },
 
-  // Crear nuevo usuario (solo admin) - Note: with Supabase Auth, user creation is handled differently
-  // This endpoint can update a profile after Supabase Auth creates the user
+  // Crear nuevo usuario (solo admin/supervisor) usando Supabase Admin API
   createUser: async (req, res) => {
     try {
-      const { nombre, email, rol } = req.body;
+      const { nombre, email, rol = 'recepcionista', activo = true } = req.body;
 
-      // Validations
       if (!nombre || !email) {
-        return res.status(400).json({
-          success: false,
-          message: 'Name and email are required'
-        });
+        return res.status(400).json({ success: false, message: 'Name and email are required' });
       }
 
-      // Check if profile already exists
-      const { data: existing } = await supabase
+      // If profile already exists, return conflict
+      const { data: existingProfile } = await supabase
         .from('profiles')
-        .select('id')
+        .select('id, email')
         .eq('email', email)
-        .single();
+        .maybeSingle();
 
-      if (existing) {
-        return res.status(409).json({
-          success: false,
-          message: 'Email already registered'
-        });
+      if (existingProfile) {
+        return res.status(409).json({ success: false, message: 'Email already registered' });
       }
 
-      // Note: In Supabase, user creation is done via Auth.
-      // This is a simplified version that assumes Auth already created the user.
-      // You might want to use Supabase Admin API to create auth users if needed.
-
-      res.status(400).json({
-        success: false,
-        message: 'User creation must be done via Supabase Auth + Google OAuth. Use update endpoint to modify profiles.'
+      // Create auth user (no password; allow email login later or Google OAuth link). Email confirmed so it can sign in.
+      const { data: created, error: authErr } = await supabase.auth.admin.createUser({
+        email,
+        email_confirm: true,
+        user_metadata: { nombre, rol },
       });
+
+      if (authErr) {
+        // If already registered in Auth, try to attach profile
+        if (authErr.message && authErr.message.toLowerCase().includes('already registered')) {
+          // Try to fetch by email in profiles again just in case
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('id, email')
+            .eq('email', email)
+            .maybeSingle();
+          if (prof) {
+            return res.status(409).json({ success: false, message: 'Email already registered' });
+          }
+          return res.status(400).json({ success: false, message: 'User exists in Auth but no profile. Ask the user to login once to create profile automatically.' });
+        }
+        throw authErr;
+      }
+
+      const newUserId = created?.user?.id;
+      if (!newUserId) {
+        return res.status(500).json({ success: false, message: 'Failed to create auth user' });
+      }
+
+      // Upsert profile with the same id as auth.user.id
+      const { data: upserted, error: upErr } = await supabase
+        .from('profiles')
+        .upsert({ id: newUserId, nombre, email, rol, activo }, { onConflict: 'id' })
+        .select('*')
+        .single();
+      if (upErr) throw upErr;
+
+      return res.status(201).json({ success: true, message: 'User created successfully', data: upserted });
     } catch (error) {
       console.error('[userController.createUser] Error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error creating user'
-      });
+      res.status(500).json({ success: false, message: 'Error creating user' });
     }
   },
 
