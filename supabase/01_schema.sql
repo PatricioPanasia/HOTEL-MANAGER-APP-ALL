@@ -72,56 +72,56 @@ alter table public.asistencias enable row level security;
 alter table public.reportes enable row level security;
 
 -- Profiles: user can see/update own profile
-create policy if not exists profiles_self_select on public.profiles
+create policy profiles_self_select on public.profiles
   for select using (auth.uid() = id);
-create policy if not exists profiles_self_update on public.profiles
+create policy profiles_self_update on public.profiles
   for update using (auth.uid() = id);
 
 -- Helper: is_admin_or_supervisor check via profiles
 -- Usage inside policies via exists() predicate
 
 -- Tareas policies
-create policy if not exists tareas_owner_select on public.tareas
+create policy tareas_owner_select on public.tareas
   for select using (
     usuario_asignado = auth.uid() or usuario_creador = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
     )
   );
-create policy if not exists tareas_owner_insert on public.tareas
+create policy tareas_owner_insert on public.tareas
   for insert with check (
     usuario_creador = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
     )
   );
-create policy if not exists tareas_owner_update on public.tareas
+create policy tareas_owner_update on public.tareas
   for update using (
     usuario_asignado = auth.uid() or usuario_creador = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
     )
   );
-create policy if not exists tareas_owner_delete on public.tareas
+create policy tareas_owner_delete on public.tareas
   for delete using (
     exists (select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor'))
   );
 
 -- Notas policies
-create policy if not exists notas_visibility on public.notas
+create policy notas_visibility on public.notas
   for select using (
     usuario_id = auth.uid() or tipo in ('equipo','general') or usuario_asignado = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol = 'admin'
     )
   );
-create policy if not exists notas_insert on public.notas
+create policy notas_insert on public.notas
   for insert with check (
     usuario_id = auth.uid()
   );
-create policy if not exists notas_update on public.notas
+create policy notas_update on public.notas
   for update using (
     usuario_id = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol = 'admin'
     )
   );
-create policy if not exists notas_delete on public.notas
+create policy notas_delete on public.notas
   for delete using (
     usuario_id = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol = 'admin'
@@ -129,29 +129,29 @@ create policy if not exists notas_delete on public.notas
   );
 
 -- Asistencias policies
-create policy if not exists asistencias_select on public.asistencias
+create policy asistencias_select on public.asistencias
   for select using (
     usuario_id = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
     )
   );
-create policy if not exists asistencias_insert on public.asistencias
+create policy asistencias_insert on public.asistencias
   for insert with check (usuario_id = auth.uid());
-create policy if not exists asistencias_update on public.asistencias
+create policy asistencias_update on public.asistencias
   for update using (usuario_id = auth.uid() or exists (
     select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
   ));
 
 -- Reportes policies
-create policy if not exists reportes_select on public.reportes
+create policy reportes_select on public.reportes
   for select using (
     usuario_id = auth.uid() or exists (
       select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')
     )
   );
-create policy if not exists reportes_insert on public.reportes
+create policy reportes_insert on public.reportes
   for insert with check (usuario_id = auth.uid());
-create policy if not exists reportes_update on public.reportes
+create policy reportes_update on public.reportes
   for update using (
     exists (select 1 from public.profiles p where p.id = auth.uid() and p.rol in ('admin','supervisor')) or usuario_id = auth.uid()
   );
