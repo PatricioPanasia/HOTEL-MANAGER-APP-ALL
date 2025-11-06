@@ -52,9 +52,32 @@ const TaskController = {
 
       console.log('[taskController.getAllTasks] Tasks fetched successfully:', tasks?.length || 0, 'tasks found');
 
+      // Enriquecer con nombres de creador y asignado (sin joins duros)
+      let enriched = tasks || [];
+      if (enriched.length > 0) {
+        const ids = new Set();
+        enriched.forEach(t => {
+          if (t.usuario_creador) ids.add(t.usuario_creador);
+          if (t.usuario_asignado) ids.add(t.usuario_asignado);
+        });
+        const idArray = Array.from(ids);
+        if (idArray.length > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id,nombre,email')
+            .in('id', idArray);
+          const map = new Map((profiles || []).map(u => [u.id, u]));
+          enriched = enriched.map(t => ({
+            ...t,
+            creador_nombre: map.get(t.usuario_creador)?.nombre || map.get(t.usuario_creador)?.email || 'Desconocido',
+            asignado_nombre: map.get(t.usuario_asignado)?.nombre || map.get(t.usuario_asignado)?.email || 'Sin asignar',
+          }));
+        }
+      }
+
       res.json({
         success: true,
-        data: tasks || [],
+        data: enriched,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
@@ -357,9 +380,41 @@ const TaskController = {
         })(),
       ]);
 
+      // Eficacia por usuario (excluye tareas creadas por sí mismo)
+      // Consideramos como "asignadas" las tareas donde usuario_asignado = userId y usuario_creador != userId
+      // y como "completadas" las anteriores con estado = 'completada'.
+      const { count: assignedConsidered } = await supabase
+        .from('tareas')
+        .select('*', { count: 'exact', head: true })
+        .eq('usuario_asignado', userId)
+        .neq('usuario_creador', userId);
+
+      const { count: completedConsidered } = await supabase
+        .from('tareas')
+        .select('*', { count: 'exact', head: true })
+        .eq('usuario_asignado', userId)
+        .neq('usuario_creador', userId)
+        .eq('estado', 'completada');
+
+      const efficiencyPct = assignedConsidered && assignedConsidered > 0
+        ? Math.round(((completedConsidered || 0) / assignedConsidered) * 100)
+        : 0;
+
       res.json({
         success: true,
-        data: { total, pendientes, en_progreso, completadas, canceladas, prioritarias }
+        data: { 
+          total, 
+          pendientes, 
+          en_progreso, 
+          completadas, 
+          canceladas, 
+          prioritarias,
+          efficiency: {
+            assigned_considered: assignedConsidered || 0,
+            completed_considered: completedConsidered || 0,
+            percentage: efficiencyPct,
+          }
+        }
       });
     } catch (error) {
       console.error('[taskController.getTaskStats] Error:', error);

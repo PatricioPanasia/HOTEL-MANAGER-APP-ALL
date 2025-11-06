@@ -291,7 +291,7 @@ const UserController = {
       // 1. Task stats using Supabase
       const { data: tasks, error: tasksError } = await supabase
         .from('tareas')
-        .select('estado')
+        .select('estado, usuario_creador, usuario_asignado')
         .eq('usuario_asignado', id);
 
       if (tasksError) throw tasksError;
@@ -302,6 +302,12 @@ const UserController = {
         en_progreso: tasks.filter(t => t.estado === 'en_progreso').length,
         completadas: tasks.filter(t => t.estado === 'completada').length,
       };
+
+      // Eficacia excluyendo tareas creadas por el mismo usuario (personales)
+      const considered = tasks.filter(t => t.usuario_creador !== id);
+      const assignedConsidered = considered.length;
+      const completedConsidered = considered.filter(t => t.estado === 'completada').length;
+      const efficiencyPct = assignedConsidered > 0 ? Math.round((completedConsidered / assignedConsidered) * 100) : 0;
 
       // 2. Attendance history (last 30 days)
       const { data: attendanceHistory, error: attendanceError } = await supabase
@@ -317,6 +323,11 @@ const UserController = {
         success: true,
         data: {
           taskStats,
+          efficiency: {
+            assigned_considered: assignedConsidered,
+            completed_considered: completedConsidered,
+            percentage: efficiencyPct,
+          },
           attendanceHistory,
         },
       });
