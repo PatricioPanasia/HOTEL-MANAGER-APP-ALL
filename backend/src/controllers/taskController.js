@@ -387,12 +387,17 @@ const TaskController = {
         // Admin: promedio de eficacia de todos los usuarios (supervisors + recepcionistas)
         const { data: allUsers } = await supabase
           .from('profiles')
-          .select('id, rol')
+          .select('id, rol, nombre')
           .in('rol', ['supervisor', 'recepcionista'])
           .eq('activo', true);
 
+        console.log('[taskController.getTaskStats] Admin mode: found', allUsers?.length || 0, 'active users');
+
         if (allUsers && allUsers.length > 0) {
           const efficiencies = [];
+          let totalAssigned = 0;
+          let totalCompleted = 0;
+
           for (const u of allUsers) {
             const { data: userTasks } = await supabase
               .from('tareas')
@@ -402,15 +407,27 @@ const TaskController = {
             const considered = (userTasks || []).filter(t => t.usuario_creador !== u.id);
             const assignedCount = considered.length;
             const completedCount = considered.filter(t => t.estado === 'completada').length;
-            const userPct = assignedCount > 0 ? (completedCount / assignedCount) * 100 : 0;
-            efficiencies.push(userPct);
+
+            console.log(`[taskController.getTaskStats] User ${u.nombre} (${u.id}): ${assignedCount} assigned, ${completedCount} completed`);
+
+            // Solo incluir usuarios con tareas asignadas por otros
+            if (assignedCount > 0) {
+              const userPct = (completedCount / assignedCount) * 100;
+              efficiencies.push(userPct);
+              totalAssigned += assignedCount;
+              totalCompleted += completedCount;
+            }
           }
+
           const avgPct = efficiencies.length > 0 
             ? efficiencies.reduce((sum, p) => sum + p, 0) / efficiencies.length 
             : 0;
+
+          console.log(`[taskController.getTaskStats] Admin efficiency: ${efficiencies.length} users with tasks, avg ${avgPct.toFixed(2)}%`);
+
           efficiencyData = {
-            assigned_considered: 0, // No aplica globalmente para admin
-            completed_considered: 0,
+            assigned_considered: totalAssigned,
+            completed_considered: totalCompleted,
             percentage: Math.round(avgPct),
           };
         }
