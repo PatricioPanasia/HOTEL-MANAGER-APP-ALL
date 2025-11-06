@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const supabase = require('../config/supabase');
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mkflmlbqfdcvdnknmkmt.supabase.co';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://your-project-id.supabase.co';
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET; // HS256 secret from Supabase API settings
 const JWT_ISSUER = process.env.JWT_ISSUER || `${SUPABASE_URL}/auth/v1`;
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'authenticated';
