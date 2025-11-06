@@ -380,25 +380,65 @@ const TaskController = {
         })(),
       ]);
 
-      // Eficacia por usuario (excluye tareas creadas por sí mismo)
-      // Consideramos como "asignadas" las tareas donde usuario_asignado = userId y usuario_creador != userId
-      // y como "completadas" las anteriores con estado = 'completada'.
-      const { count: assignedConsidered } = await supabase
-        .from('tareas')
-        .select('*', { count: 'exact', head: true })
-        .eq('usuario_asignado', userId)
-        .neq('usuario_creador', userId);
+      // Eficacia: diferente lógica por rol
+      let efficiencyData = { assigned_considered: 0, completed_considered: 0, percentage: 0 };
 
-      const { count: completedConsidered } = await supabase
-        .from('tareas')
-        .select('*', { count: 'exact', head: true })
-        .eq('usuario_asignado', userId)
-        .neq('usuario_creador', userId)
-        .eq('estado', 'completada');
+      if (req.user.rol === 'admin') {
+        // Admin: promedio de eficacia de todos los usuarios (supervisors + recepcionistas)
+        const { data: allUsers } = await supabase
+          .from('profiles')
+          .select('id, rol')
+          .in('rol', ['supervisor', 'recepcionista'])
+          .eq('activo', true);
 
-      const efficiencyPct = assignedConsidered && assignedConsidered > 0
-        ? Math.round(((completedConsidered || 0) / assignedConsidered) * 100)
-        : 0;
+        if (allUsers && allUsers.length > 0) {
+          const efficiencies = [];
+          for (const u of allUsers) {
+            const { data: userTasks } = await supabase
+              .from('tareas')
+              .select('estado, usuario_creador, usuario_asignado')
+              .eq('usuario_asignado', u.id);
+            
+            const considered = (userTasks || []).filter(t => t.usuario_creador !== u.id);
+            const assignedCount = considered.length;
+            const completedCount = considered.filter(t => t.estado === 'completada').length;
+            const userPct = assignedCount > 0 ? (completedCount / assignedCount) * 100 : 0;
+            efficiencies.push(userPct);
+          }
+          const avgPct = efficiencies.length > 0 
+            ? efficiencies.reduce((sum, p) => sum + p, 0) / efficiencies.length 
+            : 0;
+          efficiencyData = {
+            assigned_considered: 0, // No aplica globalmente para admin
+            completed_considered: 0,
+            percentage: Math.round(avgPct),
+          };
+        }
+      } else {
+        // Supervisor/Recepcionista: eficacia individual (excluye tareas creadas por sí mismo)
+        const { count: assignedConsidered } = await supabase
+          .from('tareas')
+          .select('*', { count: 'exact', head: true })
+          .eq('usuario_asignado', userId)
+          .neq('usuario_creador', userId);
+
+        const { count: completedConsidered } = await supabase
+          .from('tareas')
+          .select('*', { count: 'exact', head: true })
+          .eq('usuario_asignado', userId)
+          .neq('usuario_creador', userId)
+          .eq('estado', 'completada');
+
+        const efficiencyPct = assignedConsidered && assignedConsidered > 0
+          ? Math.round(((completedConsidered || 0) / assignedConsidered) * 100)
+          : 0;
+
+        efficiencyData = {
+          assigned_considered: assignedConsidered || 0,
+          completed_considered: completedConsidered || 0,
+          percentage: efficiencyPct,
+        };
+      }
 
       res.json({
         success: true,
@@ -409,11 +449,7 @@ const TaskController = {
           completadas, 
           canceladas, 
           prioritarias,
-          efficiency: {
-            assigned_considered: assignedConsidered || 0,
-            completed_considered: completedConsidered || 0,
-            percentage: efficiencyPct,
-          }
+          efficiency: efficiencyData
         }
       });
     } catch (error) {
