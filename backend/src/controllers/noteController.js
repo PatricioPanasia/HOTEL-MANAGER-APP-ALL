@@ -7,7 +7,7 @@ const NoteController = {
       const { page = 1, limit = 10, tipo, importante } = req.query;
       const offset = (page - 1) * parseInt(limit);
 
-      let q = supabase.from('notas').select('*', { count: 'exact' });
+  let q = supabase.from('notas').select('*', { count: 'exact' });
 
       if (tipo) q = q.eq('tipo', tipo);
       if (typeof importante !== 'undefined') q = q.eq('importante', importante === 'true');
@@ -27,9 +27,32 @@ const NoteController = {
 
       if (error) throw error;
 
+      // Enriquecer con nombres de creador y asignado
+      let enriched = notes || [];
+      if (enriched.length > 0) {
+        const ids = new Set();
+        enriched.forEach(n => {
+          if (n.usuario_id) ids.add(n.usuario_id);
+          if (n.usuario_asignado) ids.add(n.usuario_asignado);
+        });
+        const idArray = Array.from(ids);
+        if (idArray.length > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id,nombre,email')
+            .in('id', idArray);
+          const map = new Map((profiles || []).map(u => [u.id, u]));
+          enriched = enriched.map(n => ({
+            ...n,
+            usuario_nombre: map.get(n.usuario_id)?.nombre || map.get(n.usuario_id)?.email || 'Desconocido',
+            asignado_nombre: n.usuario_asignado ? (map.get(n.usuario_asignado)?.nombre || map.get(n.usuario_asignado)?.email || 'Desconocido') : null,
+          }));
+        }
+      }
+
       res.json({
         success: true,
-        data: notes || [],
+        data: enriched,
         pagination: {
           page: parseInt(page),
           limit: parseInt(limit),
