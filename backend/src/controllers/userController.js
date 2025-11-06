@@ -85,7 +85,7 @@ const UserController = {
   // Crear nuevo usuario (solo admin/supervisor) usando Supabase Admin API
   createUser: async (req, res) => {
     try {
-      const { nombre, email, rol = 'recepcionista', activo = true } = req.body;
+      const { nombre, email, rol = 'recepcionista', activo = true, password } = req.body;
 
       if (!nombre || !email) {
         return res.status(400).json({ success: false, message: 'Name and email are required' });
@@ -102,9 +102,13 @@ const UserController = {
         return res.status(409).json({ success: false, message: 'Email already registered' });
       }
 
-      // Create auth user (no password; allow email login later or Google OAuth link). Email confirmed so it can sign in.
+      // Generate temporary password if not provided
+      const userPassword = password || `Hotel${Math.floor(Math.random() * 10000)}!`;
+
+      // Create auth user with password. Email confirmed so it can sign in immediately.
       const { data: created, error: authErr } = await supabase.auth.admin.createUser({
         email,
+        password: userPassword,
         email_confirm: true,
         user_metadata: { nombre, rol },
       });
@@ -139,7 +143,12 @@ const UserController = {
         .single();
       if (upErr) throw upErr;
 
-      return res.status(201).json({ success: true, message: 'User created successfully', data: upserted });
+      return res.status(201).json({ 
+        success: true, 
+        message: 'User created successfully', 
+        data: upserted,
+        temporaryPassword: password ? undefined : userPassword // Only return if auto-generated
+      });
     } catch (error) {
       console.error('[userController.createUser] Error:', error);
       res.status(500).json({ success: false, message: 'Error creating user' });
