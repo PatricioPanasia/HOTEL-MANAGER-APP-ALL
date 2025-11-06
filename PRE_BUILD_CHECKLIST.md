@@ -6,27 +6,21 @@
 
 ## 🔐 1. Variables de Entorno
 
-### **Crear archivo `.env` en frontend/**
+### **✅ YA CONFIGURADO en `eas.json`:**
 
-Actualmente NO existe un archivo `.env` en el proyecto. Debes crearlo basándote en `.env.example`:
+El perfil `production` ya tiene todas las variables necesarias:
 
-```bash
-cd frontend
-cp .env.example .env
+```json
+{
+  "EXPO_PUBLIC_API_BASE_URL": "https://hotel-manager-backend-ruddy.vercel.app/api",
+  "EXPO_PUBLIC_SUPABASE_URL": "https://mkflmlbqfdcvdnknmkmt.supabase.co",
+  "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGc..."
+}
 ```
 
-### **Configurar las variables en `.env`:**
+✅ **No necesitas crear archivo `.env`** - Las variables se inyectan en el build
 
-```bash
-# URL del backend en producción (Vercel)
-EXPO_PUBLIC_API_BASE_URL=https://hotel-manager-backend-ruddy.vercel.app/api
-
-# Supabase credentials
-EXPO_PUBLIC_SUPABASE_URL=https://mkflmlbqfdcvdnknmkmt.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1rZmxtbGJxZmRjdmRua25ta210Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzA3NTc2ODEsImV4cCI6MjA0NjMzMzY4MX0.0Lx6LxhsWrIg0vb_aTshOBDqWR2Y1Dkv-90Y8xJp3wI
-```
-
-⚠️ **IMPORTANTE**: El archivo `.env` está en `.gitignore` y NO debe subirse a GitHub.
+⚠️ **NOTA**: El archivo `.env` local solo se usa para desarrollo web, NO para APK builds.
 
 ---
 
@@ -60,9 +54,7 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd
 
 ## 🔧 3. Configuración de Build (EAS)
 
-### **Verificar `eas.json`:**
-
-✅ **Profile de producción** debe apuntar a tu backend en Vercel:
+### **✅ `eas.json` YA CONFIGURADO:**
 
 ```json
 "production": {
@@ -71,16 +63,18 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd
     "buildType": "apk"
   },
   "env": {
-    "EXPO_PUBLIC_API_BASE_URL": "https://hotel-manager-backend-ruddy.vercel.app/api"
+    "EXPO_PUBLIC_API_BASE_URL": "https://hotel-manager-backend-ruddy.vercel.app/api",
+    "EXPO_PUBLIC_SUPABASE_URL": "https://mkflmlbqfdcvdnknmkmt.supabase.co",
+    "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGc..."
   }
 }
 ```
 
-⚠️ **IMPORTANTE**: Falta el `/api` al final de la URL. Debe ser:
-- ❌ `https://hotel-manager-backend-ruddy.vercel.app`
-- ✅ `https://hotel-manager-backend-ruddy.vercel.app/api`
+✅ **Auto-increment**: Incrementa `versionCode` automáticamente en cada build
+✅ **Build type APK**: Genera APK directamente instalable (no AAB)
+✅ **Variables inyectadas**: Todas las env vars necesarias están configuradas
 
-**ACCIÓN REQUERIDA**: Corregir esta URL en `eas.json`
+**No necesitas cambiar nada** - Listo para buildear.
 
 ---
 
@@ -109,22 +103,37 @@ curl https://hotel-manager-backend-ruddy.vercel.app/api/users
 
 ## 🔐 5. Supabase Configuration
 
-### **Verificar en Supabase Dashboard:**
+### **✅ Verificar en Supabase Dashboard:**
 
-1. **Authentication Settings**:
+Ve a: https://supabase.com/dashboard/project/mkflmlbqfdcvdnknmkmt
+
+1. **Authentication → URL Configuration**:
+   - ✅ **CRÍTICO**: Agregar `hotelmanager://auth/callback` a "Redirect URLs"
+   - ✅ También debe estar: `https://hotel-manager-frontend.vercel.app/auth/callback`
+
+2. **Authentication → Providers**:
    - ✅ Email/Password enabled
-   - ✅ Google OAuth configured
-   - ✅ Redirect URLs incluye: `hotelmanager://auth/callback`
+   - ✅ Google OAuth configured con Client ID/Secret
 
-2. **Database**:
+3. **Database**:
    - ✅ Tablas: `profiles`, `tareas`, `notas`, `asistencias`
    - ✅ RLS Policies configuradas
    - ✅ Foreign keys y relaciones correctas
 
-3. **API Keys**:
-   - ✅ `SUPABASE_URL` correcta
-   - ✅ `SUPABASE_ANON_KEY` correcta (pública)
-   - ⚠️ `SUPABASE_SERVICE_KEY` solo en backend (privada)
+4. **API Settings**:
+   - ✅ `SUPABASE_URL`: `https://mkflmlbqfdcvdnknmkmt.supabase.co`
+   - ✅ `SUPABASE_ANON_KEY`: Ya configurada en eas.json (pública - OK)
+   - ⚠️ `SUPABASE_SERVICE_KEY`: Solo en backend (privada - NO exponer)
+
+### **⚠️ CRÍTICO - Agregar Redirect URL para Android:**
+
+**Sin esto, el login con Google NO funcionará en la APK:**
+
+```
+hotelmanager://auth/callback
+```
+
+Esto permite que después del login con Google, el navegador vuelva a la app.
 
 ---
 
@@ -250,18 +259,30 @@ Accede a: https://hotel-manager-frontend.vercel.app
 
 ## 🚀 11. Comando Final para Build
 
-Una vez verificado TODO lo anterior:
+### ✅ **Una vez verificado TODO lo anterior:**
 
-### **Opción 1: Preview Build (Recomendada para testing)**
-```bash
-cd frontend
-eas build --platform android --profile production
+```powershell
+cd C:\Users\karin\hotel-manager-app\frontend
+eas build -p android --profile production
 ```
 
-### **Opción 2: Local Build (más rápido, requiere Android SDK)**
-```bash
-cd frontend
-eas build --platform android --profile production --local
+### **Qué hará el comando:**
+
+1. ✅ Sube código a la nube de Expo
+2. ✅ Instala todas las dependencias
+3. ✅ Inyecta variables de entorno del perfil `production`
+4. ✅ Genera keystore automáticamente (primera vez)
+5. ✅ Compila APK con Gradle
+6. ✅ Te da enlace de descarga
+
+⏱️ **Tiempo estimado**: 10-20 minutos
+
+### **Alternativa - Build local (más rápido):**
+
+Si tienes Android SDK instalado:
+
+```powershell
+eas build -p android --profile production --local
 ```
 
 ---
@@ -270,28 +291,46 @@ eas build --platform android --profile production --local
 
 Antes de generar la APK, debes:
 
-### 1. **Crear archivo `.env` en `frontend/`**
-```bash
-cd frontend
-cp .env.example .env
-# Editar .env con las credenciales correctas
+### ✅ 1. **Agregar Redirect URL en Supabase** (CRÍTICO)
+
+Ve a: https://supabase.com/dashboard/project/mkflmlbqfdcvdnknmkmt/auth/url-configuration
+
+Agrega:
+```
+hotelmanager://auth/callback
 ```
 
-### 2. **Corregir URL en `eas.json`**
-Cambiar en el profile `production`:
-```json
-"EXPO_PUBLIC_API_BASE_URL": "https://hotel-manager-backend-ruddy.vercel.app/api"
-```
-(Agregar `/api` al final)
+**Sin esto, el login con Google NO funcionará en la APK.**
 
-### 3. **Verificar que el backend responda**
-```bash
+### ✅ 2. **Verificar que el backend responda**
+```powershell
 curl https://hotel-manager-backend-ruddy.vercel.app/api
 ```
 
-### 4. **Testing completo en Web (Vercel)**
+Debe devolver alguna respuesta (aunque sea 404 = está vivo).
+
+### ✅ 3. **Testing completo en Web (Vercel)**
+
 Probar todas las funcionalidades críticas en:
 https://hotel-manager-frontend.vercel.app
+
+**Checklist de testing:**
+- [ ] Login con Google OAuth
+- [ ] Login con email/password  
+- [ ] Dashboard carga estadísticas
+- [ ] Crear/editar/eliminar tareas
+- [ ] Crear/editar/eliminar notas
+- [ ] Check-in/check-out asistencia (hasta 4ta salida)
+- [ ] Gestión de usuarios (crear con contraseña)
+- [ ] Modal de estadísticas de usuario (sin glitch de animación)
+- [ ] Fechas correctas (zona horaria Argentina)
+
+### ✅ 4. **Instalar EAS CLI y login**
+
+```powershell
+npm install -g eas-cli
+eas login
+```
 
 ---
 
